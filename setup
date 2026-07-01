@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# dotfiles install script — runs as the dev user with cwd ~/dotfiles on the devenv instance.
+# Add symlinks / config setup here. No-op for now.
+echo "dotfiles setup: nothing to do yet"
