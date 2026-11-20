@@ -157,3 +157,15 @@ function clean_local_branches() {
 fpath+=~/.zfunc; autoload -Uz compinit; compinit
 
 zstyle ':completion:*' menu select
+
+# Devenv only: show the last sync-repos notice once, then clone/fast-forward
+# repos.txt into ~/code in the background, at most every 4 hours.
+if [[ -o interactive && -d /mnt/devdata ]] && (( $+commands[sync-repos] )); then
+  _sr_notice="${XDG_CACHE_HOME:-$HOME/.cache}/sync-repos/notice"
+  if [[ -s "$_sr_notice" ]]; then
+    print -r -- "⚠ sync-repos skipped: $(<"$_sr_notice")  (log: ~/.cache/sync-repos/log)"
+    mv -f "$_sr_notice" "$_sr_notice.shown"
+  fi
+  unset _sr_notice
+  sync-repos --if-stale 14400 &>/dev/null &!
+fi
