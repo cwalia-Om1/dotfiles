@@ -125,6 +125,37 @@ fi
 ln -sfn "$REPO_DIR/docker/config.json" "$HOME/.docker/config.json"
 log "Installed/symlinked ~/.docker/config.json"
 
+# Persist ~/.config/herdr (session snapshot, plugins) on EBS so it survives a
+# rebuild. Link the whole dir: herdr saves via temp-file+rename, which would
+# replace a file-level symlink. Adapted from jyates-om1/dotfiles.
+HERDR_CFG="$HOME/.config/herdr"
+if [ -d /mnt/devdata ]; then
+    HERDR_PERSIST="/mnt/devdata/.config/herdr"
+    if [ ! -d "$HERDR_PERSIST" ]; then
+        sudo -n install -d -o "$(id -un)" -g "$(id -gn)" \
+                /mnt/devdata/.config "$HERDR_PERSIST" 2>/dev/null \
+            || warn "could not create $HERDR_PERSIST (no passwordless sudo?); herdr snapshots stay ephemeral"
+    fi
+
+    if [ -d "$HERDR_PERSIST" ]; then
+        if [ -L "$HERDR_CFG" ] && [ "$(readlink -f "$HERDR_CFG")" = "$HERDR_PERSIST" ]; then
+            log "herdr snapshots already persisted on EBS"
+        elif [ -S "$HERDR_CFG/herdr.sock" ] && herdr status server >/dev/null 2>&1; then
+            # A live server owns these sockets; swapping the dir now would drop it.
+            cp -an "$HERDR_CFG/session.json" "$HERDR_PERSIST/" 2>/dev/null || true
+            warn "herdr server running; snapshot dir moves to $HERDR_PERSIST on next fresh start"
+        else
+            mkdir -p "$(dirname "$HERDR_CFG")"
+            if [ -e "$HERDR_CFG" ] && [ ! -L "$HERDR_CFG" ]; then
+                cp -an "$HERDR_CFG/." "$HERDR_PERSIST/" 2>/dev/null || true
+                rm -rf "$HERDR_CFG"
+            fi
+            ln -sfn "$HERDR_PERSIST" "$HERDR_CFG"
+            log "herdr snapshots persisted on EBS: $HERDR_CFG -> $HERDR_PERSIST"
+        fi
+    fi
+fi
+
 # herdr config. Only config.toml is tracked -- the rest of ~/.config/herdr
 # (socket, logs, session state) is per-host runtime state and must stay local.
 mkdir -p "$HOME/.config/herdr"
