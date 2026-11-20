@@ -97,6 +97,15 @@ EOF
             && log "Pointed ~/.gitconfig template include at $GITCONFIG_INCLUDE" \
             || warn "could not set include.path in ~/.gitconfig"
     fi
+
+    # gh as git's HTTPS credential helper, so internal-repo clones (e.g. the
+    # herdr-presets Claude plugin) work. Skipped until gh is logged in.
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        gh auth setup-git && log "Configured gh as git credential helper" \
+            || warn "gh auth setup-git failed"
+    else
+        log "gh not logged in; skipping gh auth setup-git (re-run setup after devenv connect)"
+    fi
 else
     log "Devcontainer detected, skipping gitconfig (auto-loaded from host)"
 fi
