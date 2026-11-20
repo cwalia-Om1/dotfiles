@@ -65,15 +65,9 @@ if [ -z "${REMOTE_CONTAINERS:-}" ] && [ -z "${CODESPACES:-}" ] && [ ! -f "/.dock
     GITCONFIG_INCLUDE="$REPO_DIR/git/gitconfig_template"
 
     # Migrate the old symlink install (~/.gitconfig -> tracked template).
-    # Keep devenv's own link into /mnt/devdata so ~/.gitconfig survives rebuilds.
     if [ -L "$HOME/.gitconfig" ]; then
-        case "$(readlink -f "$HOME/.gitconfig")" in
-            /mnt/devdata/*) log "~/.gitconfig is persisted on EBS; keeping the link" ;;
-            *)
-                rm -f "$HOME/.gitconfig"
-                log "Removed legacy ~/.gitconfig symlink"
-                ;;
-        esac
+        rm -f "$HOME/.gitconfig"
+        log "Removed legacy ~/.gitconfig symlink"
     fi
 
     if [ ! -f "$HOME/.gitconfig" ]; then
