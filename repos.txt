@@ -1,0 +1,6 @@
+# Repos sync-repos keeps in ~/code: <om1inc repo> [extra git clone flags]
+origin
+app-factory
+core-platform
+infrastructure
+circus --filter=blob:none

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Clone missing repos from repos.txt into ~/code and fast-forward their main.
+# Never resets, stashes or checks out: anything that isn't a clean
+# fast-forward is skipped and reported in the notice file.
+#
+#   sync-repos                    run now
+#   sync-repos --if-stale <secs>  run only if the last run is older than <secs>
+set -uo pipefail
+
+DOTFILES="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+LIST="${SYNC_REPOS_LIST:-$DOTFILES/repos.txt}"
+CODE_DIR="${SYNC_REPOS_DIR:-$HOME/code}"
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/sync-repos"
+LOG="$STATE/log"
+NOTICE="$STATE/notice"
+STAMP="$STATE/last-run"
+OWNER="om1inc"
+
+mkdir -p "$STATE" "$CODE_DIR"
+log() { echo "[$(date -Iseconds)] $*" >> "$LOG"; }
+
+if [ "${1:-}" = "--if-stale" ] && [ -f "$STAMP" ]; then
+    age=$(( $(date +%s) - $(date -r "$STAMP" +%s) ))
+    [ "$age" -lt "${2:-14400}" ] && exit 0
+fi
+
+# One run at a time (several shells can start together).
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$STATE/lock"
+    flock -n 9 || exit 0
+fi
+
+if ! gh auth status >/dev/null 2>&1; then
+    log "gh not logged in; skipping (will retry next shell)"
+    echo "gh not logged in (run devenv connect or gh auth login)" > "$NOTICE"
+    exit 0
+fi
+touch "$STAMP"
+
+# gh as credential helper for this run only, so it works before setup has
+# configured ~/.gitconfig and for blob-less clones fetching on demand later.
+export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=credential.https://github.com.helper \
+    GIT_CONFIG_VALUE_0='!gh auth git-credential'
+
+skipped=()
+while read -r name flags; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    dest="$CODE_DIR/$name"
+
+    if [ ! -d "$dest/.git" ]; then
+        if [ -e "$dest" ]; then
+            skipped+=("$name (exists, not a git repo)")
+            continue
+        fi
+        log "cloning $name ${flags:-}"
+        # shellcheck disable=SC2086
+        git clone --quiet ${flags:-} "https://github.com/$OWNER/$name.git" "$dest" >> "$LOG" 2>&1 \
+            || skipped+=("$name (clone failed)")
+        continue
+    fi
+
+    if ! git -C "$dest" fetch --quiet origin >> "$LOG" 2>&1; then
+        skipped+=("$name (fetch failed)")
+        continue
+    fi
+
+    branch="$(git -C "$dest" symbolic-ref --quiet --short HEAD || echo DETACHED)"
+    if [ "$branch" = "main" ]; then
+        if [ -n "$(git -C "$dest" status --porcelain --untracked-files=no)" ]; then
+            skipped+=("$name (uncommitted changes on main)")
+        elif ! git -C "$dest" merge --ff-only --quiet origin/main >> "$LOG" 2>&1; then
+            skipped+=("$name (main diverged from origin/main)")
+        fi
+    else
+        # Moves the local main ref without touching the checked-out branch;
+        # git refuses anything that isn't a fast-forward.
+        git -C "$dest" fetch --quiet origin main:main >> "$LOG" 2>&1 \
+            || skipped+=("$name (main diverged from origin/main)")
+    fi
+done < "$LIST"
+
+if [ ${#skipped[@]} -gt 0 ]; then
+    (IFS=','; echo "${skipped[*]}") | sed 's/,/, /g' > "$NOTICE"
+    log "skipped: $(cat "$NOTICE")"
+else
+    rm -f "$NOTICE"
+    log "all repos up to date"
+fi

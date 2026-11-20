@@ -119,6 +119,11 @@ fi
 ln -sfn "$REPO_DIR/docker/config.json" "$HOME/.docker/config.json"
 log "Installed/symlinked ~/.docker/config.json"
 
+# sync-repos on PATH (run in the background by .zshrc on the devenv).
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$REPO_DIR/bin/sync-repos" "$HOME/.local/bin/sync-repos"
+log "Linked ~/.local/bin/sync-repos"
+
 # Persist ~/.config/herdr (session snapshot, plugins) on EBS so it survives a
 # rebuild. Link the whole dir: herdr saves via temp-file+rename, which would
 # replace a file-level symlink. Adapted from jyates-om1/dotfiles.
