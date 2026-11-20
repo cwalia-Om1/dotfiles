@@ -1,0 +1,6 @@
+{
+  "claude": {
+    "kind": "claude",
+    "description": "Claude Code on your normal login (e.g. Claude Teams)"
+  }
+}

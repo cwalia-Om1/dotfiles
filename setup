@@ -1,5 +1,321 @@
 #!/usr/bin/env bash
-set -euo pipefail
-# dotfiles install script — runs as the dev user with cwd ~/dotfiles on the devenv instance.
-# Add symlinks / config setup here. No-op for now.
-echo "dotfiles setup: nothing to do yet"
+
+# Sets up the shell environment on a Linux (Ubuntu/Debian) host.
+#
+# Symlinking the dotfiles is the only step that must succeed, so it runs first
+# and unconditionally. Tool installs are best-effort: each only runs if the
+# tool is missing and a failure logs a warning instead of aborting. On a
+# pre-provisioned host (e.g. an OM1 devenv instance) every tool is already
+# present, so the install section is skipped entirely and setup just symlinks.
+
+# Keep unset-variable and pipe-failure safety. Deliberately NOT `-e`: a failed
+# best-effort install must not abort the run before/after the symlinks.
+set -uo pipefail
+
+log() { echo "[$(date -Iseconds)] $*"; }
+warn() { log "WARN: $*"; }
+
+# Resolve the repo root from this script's own location so setup can be run
+# from anywhere (including as a dotfiles provisioning hook).
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+log "Using dotfiles repo at: $REPO_DIR"
+
+# Architecture, used by the AWS CLI and ECR helper download URLs.
+detect_arch() {
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+        AWS_ARCH="x86_64"
+        target="64bit"
+        ecr_arch="amd64"
+    elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        AWS_ARCH="aarch64"
+        target="arm64"
+        ecr_arch="arm64"
+    else
+        warn "Unsupported architecture: ${ARCH}"
+        return 1
+    fi
+}
+
+# ============================================================================
+# Symlink dotfiles (the critical block — runs first, never blocks on installs)
+# ============================================================================
+log "Installing/symlinking dotfiles..."
+
+# Back up existing real files (skip symlinks from previous runs).
+for f in .zshrc .zsh_plugins.txt .p10k.zsh .tmux.conf; do
+    if [ -f "$HOME/$f" ] && [ ! -L "$HOME/$f" ]; then
+        mv "$HOME/$f" "$HOME/${f}.backup"
+        log "Backed up existing $f"
+    fi
+done
+
+ln -sfn "$REPO_DIR/zsh/.zshrc" "$HOME/.zshrc"
+ln -sfn "$REPO_DIR/zsh/.zsh_plugins.txt" "$HOME/.zsh_plugins.txt"
+ln -sfn "$REPO_DIR/zsh/.p10k.zsh" "$HOME/.p10k.zsh"
+ln -sfn "$REPO_DIR/tmux/.tmux.conf" "$HOME/.tmux.conf"
+
+# gitconfig (skip in devcontainers — they auto-load the host gitconfig).
+#
+# ~/.gitconfig is a REAL machine-local file that includes the shared template.
+# It must NOT be a symlink to the tracked template: `git config --global` and
+# `gh auth setup-git` write to ~/.gitconfig, and a symlink would route those
+# machine-specific writes (credential helpers, etc.) into version control.
+if [ -z "${REMOTE_CONTAINERS:-}" ] && [ -z "${CODESPACES:-}" ] && [ ! -f "/.dockerenv" ]; then
+    GITCONFIG_INCLUDE="$REPO_DIR/git/gitconfig_template"
+
+    # Migrate the old symlink install (~/.gitconfig -> tracked template).
+    if [ -L "$HOME/.gitconfig" ]; then
+        rm -f "$HOME/.gitconfig"
+        log "Removed legacy ~/.gitconfig symlink"
+    fi
+
+    if [ ! -f "$HOME/.gitconfig" ]; then
+        # Identity comes from the template; a [user] block here would override it.
+        log "Creating ~/.gitconfig (includes template)..."
+        cat > "$HOME/.gitconfig" <<EOF
+[include]
+    path = $GITCONFIG_INCLUDE
+EOF
+    else
+        # Real file already exists — keep its identity/credentials, just
+        # re-point the template include.
+        #
+        # Prune before adding, rather than adding only when absent. `--add`
+        # alone accumulated a second entry whenever the repo moved, and the
+        # stale absolute path kept resolving for as long as the old clone
+        # existed — so relocating a checkout never self-healed, and the old
+        # template silently stayed in effect. Pruning first makes a re-run
+        # from a new location authoritative.
+        #
+        # The value-pattern is a POSIX ERE matched against each value, so it
+        # only touches includes ending in this repo's own template path;
+        # unrelated include.path entries are left alone. --unset-all exits 5
+        # when nothing matches (first run on a machine) — not an error here.
+        git config --global --unset-all include.path '/git/gitconfig[._]template$' 2>/dev/null || true
+        git config --global --add include.path "$GITCONFIG_INCLUDE" \
+            && log "Pointed ~/.gitconfig template include at $GITCONFIG_INCLUDE" \
+            || warn "could not set include.path in ~/.gitconfig"
+    fi
+else
+    log "Devcontainer detected, skipping gitconfig (auto-loaded from host)"
+fi
+
+# Docker config (enables the ECR credential helper).
+mkdir -p "$HOME/.docker"
+if [ -f "$HOME/.docker/config.json" ] && [ ! -L "$HOME/.docker/config.json" ]; then
+    mv "$HOME/.docker/config.json" "$HOME/.docker/config.json.backup"
+    log "Backed up existing docker config.json"
+fi
+ln -sfn "$REPO_DIR/docker/config.json" "$HOME/.docker/config.json"
+log "Installed/symlinked ~/.docker/config.json"
+
+# herdr config. Only config.toml is tracked -- the rest of ~/.config/herdr
+# (socket, logs, session state) is per-host runtime state and must stay local.
+mkdir -p "$HOME/.config/herdr"
+if [ -f "$HOME/.config/herdr/config.toml" ] && [ ! -L "$HOME/.config/herdr/config.toml" ]; then
+    mv "$HOME/.config/herdr/config.toml" "$HOME/.config/herdr/config.toml.backup"
+    log "Backed up existing herdr config.toml"
+fi
+ln -sfn "$REPO_DIR/herdr/config.toml" "$HOME/.config/herdr/config.toml"
+log "Installed/symlinked ~/.config/herdr/config.toml"
+
+# herdr zsh completions (~/.zfunc is already on fpath via zsh/.zshrc).
+if command -v herdr >/dev/null 2>&1; then
+    mkdir -p "$HOME/.zfunc"
+    herdr completion zsh > "$HOME/.zfunc/_herdr" 2>/dev/null \
+        && log "Generated ~/.zfunc/_herdr completions" \
+        || log "WARN: herdr completion generation failed; skipping"
+
+    # herdr agent skill. Generated from the binary rather than installed via
+    # `npx skills add`: identical content, no network, and it always matches
+    # the installed herdr version after `herdr update`. Written into
+    # ~/.claude/skills (persistent) -- NOT symlinked to ~/.agents/skills,
+    # which is on ephemeral root and would dangle after a devenv rebuild.
+    mkdir -p "$HOME/.claude/skills/herdr"
+    herdr --skill > "$HOME/.claude/skills/herdr/SKILL.md" 2>/dev/null \
+        && log "Generated ~/.claude/skills/herdr/SKILL.md" \
+        || log "WARN: herdr skill generation failed; skipping"
+
+    # herdr-presets plugin (om1incubator/herdr-presets): `ha`, the preset
+    # picker action, and the herdr-agents Claude skill. Plugins live under
+    # ~/.config/herdr (ephemeral root on devenv), so reinstall when missing.
+    # The repo is internal, so the clone needs the gh credential helper. On a
+    # rebuilt devenv gh is already logged in (~/.config/gh is on /mnt/devdata)
+    # but ~/.gitconfig is fresh and lacks the helper, so pass it to this one
+    # command via GIT_CONFIG_* rather than relying on (or editing) gitconfig.
+    HERDR_PRESETS_ID="om1incubator.herdr-presets"
+    herdr_presets_root() {
+        herdr plugin list --json 2>/dev/null |
+            jq -r --arg id "$HERDR_PRESETS_ID" '.. | objects | select(.plugin_id? == $id) | .plugin_root // empty' |
+            head -1
+    }
+    if ! command -v jq >/dev/null 2>&1; then
+        warn "jq missing; skipping herdr-presets plugin"
+    else
+        if [ -z "$(herdr_presets_root)" ]; then
+            log "Installing herdr plugin om1incubator/herdr-presets..."
+            GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 \
+                GIT_CONFIG_KEY_0=credential.https://github.com.helper \
+                GIT_CONFIG_VALUE_0='!gh auth git-credential' \
+                herdr plugin install om1incubator/herdr-presets --yes >/dev/null \
+                || warn "herdr-presets install failed (gh auth login, then re-run setup)"
+        fi
+        # prefix+a stayed dead after a plugin was installed under an already
+        # running server (2026-10-01) until reload-config. Reload
+        # only when a server is already up; never start one from setup.
+        if [ -S "$HOME/.config/herdr/herdr.sock" ] && [ -n "$(herdr_presets_root)" ]; then
+            herdr server reload-config >/dev/null 2>&1 && log "Reloaded running herdr server config"
+        fi
+        HP_ROOT="$(herdr_presets_root)"
+        if [ -n "$HP_ROOT" ]; then
+            # ha on PATH (~/.local/bin), pointing into the managed checkout.
+            bash "$HP_ROOT/bin/install-cli" >/dev/null && log "Linked ~/.local/bin/ha -> herdr-presets"
+            # My presets are tracked here; link them over the plugin's seeded copy.
+            HP_CFG="$(herdr plugin config-dir "$HERDR_PRESETS_ID" 2>/dev/null | tail -1)"
+            if [ -n "$HP_CFG" ]; then
+                mkdir -p "$HP_CFG"
+                if [ -f "$HP_CFG/agents.json" ] && [ ! -L "$HP_CFG/agents.json" ]; then
+                    mv "$HP_CFG/agents.json" "$HP_CFG/agents.json.backup"
+                fi
+                ln -sfn "$REPO_DIR/herdr/agents.json" "$HP_CFG/agents.json"
+                log "Linked herdr-presets agents.json -> dotfiles"
+            fi
+        fi
+    fi
+fi
+
+# Claude Code side of herdr-presets: the herdr-agents skill ships as a Claude
+# plugin from the same repo. Remove the old dotfiles-tracked copy if present.
+if [ -L "$HOME/.claude/skills/herdr-agents" ]; then
+    rm -f "$HOME/.claude/skills/herdr-agents"
+    log "Removed legacy ~/.claude/skills/herdr-agents symlink"
+fi
+if command -v claude >/dev/null 2>&1; then
+    if ! claude plugin list 2>/dev/null | grep -q "herdr-presets@herdr-presets"; then
+        log "Installing Claude plugin herdr-presets..."
+        { claude plugin marketplace list 2>/dev/null | grep -q "herdr-presets" \
+            || claude plugin marketplace add om1incubator/herdr-presets >/dev/null; } \
+            && claude plugin install herdr-presets@herdr-presets >/dev/null \
+            || warn "Claude plugin herdr-presets install failed"
+    else
+        log "Claude plugin herdr-presets already installed"
+    fi
+fi
+
+# ============================================================================
+# Ensure antidote (plugin manager). .zshrc runs `antidote load` on first launch.
+# ============================================================================
+if [ ! -d "${HOME}/.antidote" ]; then
+    log "Installing antidote..."
+    git clone --depth=1 https://github.com/mattmc3/antidote.git "${HOME}/.antidote" \
+        || warn "antidote clone failed; first shell launch will retry the load"
+else
+    log "antidote already installed, updating..."
+    (cd "${HOME}/.antidote" && git pull --quiet) || warn "antidote update failed (continuing)"
+fi
+
+# Drop any stale static plugin cache so the next shell regenerates it against
+# the current set of cloned bundles. Without this, a rebuild that keeps $HOME
+# but wipes ~/.cache leaves a cache pointing at plugins that no longer exist.
+# Regeneration happens lazily on first shell launch (no blocking pre-download).
+rm -f "$HOME/.zsh_plugins.zsh"
+
+# Remove any legacy URL-encoded ohmyzsh clone left by older antidote (1.x) or
+# by the previous .zshrc that pre-created it. If this empty/partial dir exists,
+# antidote 2.x treats the bundle as already cloned and skips it, leaving broken
+# `source` lines. antidote re-clones to github.com/ohmyzsh/ohmyzsh on next load.
+ANTIDOTE_HOME_DIR="$(zsh -c 'source "$HOME/.antidote/antidote.zsh" 2>/dev/null && antidote home' 2>/dev/null)"
+if [ -n "$ANTIDOTE_HOME_DIR" ]; then
+    rm -rf "$ANTIDOTE_HOME_DIR"/https-COLON--SLASH--SLASH-github.com-SLASH-ohmyzsh-SLASH-ohmyzsh
+fi
+
+# ============================================================================
+# Best-effort tool installs — only when missing. Skipped on pre-provisioned
+# hosts. A failure here warns and continues; the symlinks above already landed.
+# ============================================================================
+
+# uv (Astral)
+# INSTALLER_NO_MODIFY_PATH: the installer otherwise appends a `. ~/.local/bin/env`
+# line to ~/.zshrc, which is a symlink INTO this repo -- so it dirties a tracked
+# file on every rebuild. The line is redundant anyway; .zshrc already puts
+# ~/.local/bin on PATH near the top.
+if ! command -v uv &> /dev/null; then
+    log "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
+        || warn "uv install failed"
+else
+    log "uv already installed"
+fi
+
+
+# apt packages (batched to avoid multiple `apt update` runs).
+apt_packages=()
+for pkg in zsh less unzip; do
+    command -v "$pkg" &> /dev/null || apt_packages+=("$pkg")
+done
+if [ ${#apt_packages[@]} -gt 0 ]; then
+    log "Installing apt packages: ${apt_packages[*]}"
+    if sudo -n true 2>/dev/null || sudo true 2>/dev/null; then
+        sudo apt update -yqq && sudo apt install -yqq "${apt_packages[@]}" \
+            || warn "apt install failed for: ${apt_packages[*]}"
+    else
+        warn "no sudo available; skipping apt packages: ${apt_packages[*]}"
+    fi
+fi
+
+# AWS CLI v2
+if command -v aws &> /dev/null || [ -x /usr/local/bin/aws ] || [ -x "$HOME/.local/bin/aws" ]; then
+    log "AWS CLI v2 already installed"
+elif detect_arch; then
+    log "Installing AWS CLI v2..."
+    TMP_DIR="$(mktemp -d)"
+    (
+        cd "$TMP_DIR"
+        curl -fsSLo awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" \
+            && unzip -q awscliv2.zip \
+            && ./aws/install --install-dir "$HOME/.local/aws-cli" --bin-dir "$HOME/.local/bin" --update
+    ) || warn "AWS CLI install failed"
+    rm -rf "$TMP_DIR"
+fi
+
+# AWS Session Manager Plugin
+if ! command -v session-manager-plugin >/dev/null 2>&1; then
+    if detect_arch; then
+        log "Installing AWS Session Manager Plugin..."
+        SSM_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_${target}/session-manager-plugin.deb"
+        if curl -fsSLo /tmp/session-manager-plugin.deb "$SSM_URL" \
+            && { sudo -n true 2>/dev/null || sudo true 2>/dev/null; }; then
+            sudo dpkg -i /tmp/session-manager-plugin.deb || warn "SSM plugin dpkg install failed"
+        else
+            warn "could not download SSM plugin or no sudo; skipping"
+        fi
+        rm -f /tmp/session-manager-plugin.deb
+    fi
+else
+    log "AWS Session Manager Plugin already installed"
+fi
+
+# Docker ECR Credential Helper
+if ! command -v docker-credential-ecr-login &> /dev/null; then
+    if detect_arch; then
+        log "Installing Docker ECR Credential Helper..."
+        ECR_CRED_HELPER_VERSION="0.11.0"
+        ECR_URL="https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_CRED_HELPER_VERSION}/linux-${ecr_arch}/docker-credential-ecr-login"
+        if curl -fSL "$ECR_URL" -o /tmp/docker-credential-ecr-login \
+            && { sudo -n true 2>/dev/null || sudo true 2>/dev/null; }; then
+            chmod +x /tmp/docker-credential-ecr-login
+            sudo mv /tmp/docker-credential-ecr-login /usr/local/bin/docker-credential-ecr-login \
+                && log "Docker ECR Credential Helper installed" \
+                || warn "ECR helper install failed"
+        else
+            warn "could not download ECR helper or no sudo; skipping"
+        fi
+        rm -f /tmp/docker-credential-ecr-login
+    fi
+else
+    log "Docker ECR Credential Helper already installed"
+fi
+
+log "Dotfiles installation completed."
+log "Restart your shell or run 'exec zsh' to apply changes."

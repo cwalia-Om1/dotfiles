@@ -1,0 +1,47 @@
+# Shared git configuration, tracked in the dotfiles repo.
+#
+# This file is meant to be *included* by a real ~/.gitconfig (see `setup`),
+# NOT symlinked to it. Keep it free of machine-specific state: credential
+# helpers live in ~/.gitconfig so that `gh auth setup-git` writes stay local
+# instead of dirtying this tracked file. Identity lives here so devenv
+# rebuilds (which recreate ~/.gitconfig) always have it.
+
+[user]
+    name     = cwalia-Om1
+    email    = cwalia-Om1@users.noreply.github.com
+
+[core]
+	editor   = vim
+	pager    = less -F
+
+[color]
+    ui       = auto
+
+[push]
+    default  = current
+    autoSetupRemote = true
+
+[init]
+    defaultBranch = main
+
+[rerere]
+    enabled  = true
+
+[pull]
+    rebase   = true
+
+[alias]
+    ignore	 = "!gi() { curl -L -s https://www.gitignore.io/api/$@ ;}; gi"
+
+[fetch]
+    prune	 = true
+
+[diff]
+	tool     = vimdiff
+
+[merge]
+    tool	 = vimdiff
+    conflictStyle = zdiff3
+
+[commit]
+    verbose  = true
