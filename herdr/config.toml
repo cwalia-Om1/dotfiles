@@ -42,5 +42,13 @@ description = "toggle changed-files pane (lazygit)"
 [theme]
 name = "terminal"
 
+# Claude rows: title (spinner while working) and name, red while waiting on you (~/.claude/hooks/herdr-attention.sh).
+[ui.sidebar.agents.rows_by_agent]
+claude = [
+  ["state_icon", "workspace", "tab"],
+  ["terminal_title"],
+  [{ token = "$name_ok" }, { token = "$name_alert", fg = "#ff5555", bold = true }],
+]
+
 [ui.sound]
 enabled = false
