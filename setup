@@ -126,6 +126,10 @@ log "Linked ~/.local/bin/sync-repos"
 ln -sfn "$REPO_DIR/bin/herdr-changes" "$HOME/.local/bin/herdr-changes"
 log "Linked ~/.local/bin/herdr-changes"
 
+# open-url: $BROWSER on the devenv -- copies links to the Mac clipboard (OSC 52).
+ln -sfn "$REPO_DIR/bin/open-url" "$HOME/.local/bin/open-url"
+log "Linked ~/.local/bin/open-url"
+
 # Persist ~/.config/herdr (session snapshot, plugins) on EBS so it survives a
 # rebuild. Link the whole dir: herdr saves via temp-file+rename, which would
 # replace a file-level symlink. Adapted from jyates-om1/dotfiles.

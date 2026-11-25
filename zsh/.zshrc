@@ -13,6 +13,12 @@ fi
 # PATH additions
 [[ -d "$HOME/.local/bin" ]] && export PATH="$HOME/.local/bin:$PATH"
 
+# No browser on the devenv: login links (aws, gh, python webbrowser...) are
+# copied to the Mac clipboard instead (dotfiles/bin/open-url, OSC 52 via herdr).
+if [[ "$OSTYPE" == linux* && -z "$DISPLAY" && -x "$HOME/.local/bin/open-url" ]]; then
+    export BROWSER="$HOME/.local/bin/open-url"
+fi
+
 # Snowflake browser-auth callback port; devenv forwards it over SSH.
 export SF_AUTH_SOCKET_PORT=38888
 

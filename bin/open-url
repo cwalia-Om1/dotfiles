@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# open-url: $BROWSER for the remote devenv. There is no browser here, so this
+# copies the URL to the *Mac* clipboard via OSC 52 (herdr forwards it to the
+# attached client), shows a herdr toast, and prints the URL. Paste it in Chrome.
+# Usage: open-url URL   (also used by aws, gh, python webbrowser via BROWSER)
+url="${1:-}"
+[ -n "$url" ] || { echo "usage: open-url URL" >&2; exit 2; }
+
+# Find a terminal to write the escape to: /dev/tty, else the nearest ancestor
+# process that has one (e.g. when called from an agent's non-tty shell).
+tty_dev=""
+if { : >/dev/tty; } 2>/dev/null; then
+    tty_dev=/dev/tty
+else
+    pid=$$
+    while [ "${pid:-1}" -gt 1 ]; do
+        t=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+        if [ -n "$t" ] && [ "$t" != "?" ] && [ -w "/dev/$t" ]; then tty_dev="/dev/$t"; break; fi
+        pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    done
+fi
+
+copied=no
+if [ -n "$tty_dev" ]; then
+    printf '\033]52;c;%s\a' "$(printf '%s' "$url" | base64 | tr -d '\n')" >"$tty_dev" && copied=yes
+fi
+
+if [ "$copied" = yes ]; then
+    command -v herdr >/dev/null 2>&1 && [ "${HERDR_ENV:-}" = 1 ] \
+        && herdr notification show "Link copied - paste in Chrome" --body "$url" --sound request >/dev/null 2>&1
+    printf '\n🔗 Copied to your Mac clipboard (Cmd+V in Chrome):\n   %s\n\n' "$url" >&2
+else
+    printf '\n🔗 Open this on your Mac:\n   %s\n\n' "$url" >&2
+fi
+exit 0
