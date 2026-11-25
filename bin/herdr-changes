@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# herdr-changes: toggle a lazygit pane on the right showing the changed files
+# of the repo the focused herdr pane is in.
+#
+# Bound in herdr/config.toml (type = "shell", runs detached). Press once to
+# open beside the focused pane; press again (in the same tab) to close it.
+# Usage: herdr-changes [DIR]   (DIR overrides the focused pane's directory)
+set -euo pipefail
+# Launched detached by the herdr server, whose PATH may lack ~/.local/bin.
+export PATH="$HOME/.local/bin:$PATH"
+
+notify() { herdr notification show "$1" >/dev/null 2>&1 || printf '%s\n' "$1" >&2; }
+
+for t in herdr jq git lazygit; do
+    command -v "$t" >/dev/null 2>&1 || { notify "herdr-changes: $t not found"; exit 1; }
+done
+
+cur=$(herdr pane current) || { notify "herdr-changes: no focused pane"; exit 1; }
+pane=$(jq -r '.result.pane.pane_id' <<<"$cur")
+tab=$(jq -r '.result.pane.tab_id' <<<"$cur")
+dir=${1:-$(jq -r '.result.pane.foreground_cwd // .result.pane.cwd' <<<"$cur")}
+
+state_dir="${XDG_CACHE_HOME:-$HOME/.cache}/herdr-changes"
+state="$state_dir/${tab//[^A-Za-z0-9_-]/_}"
+mkdir -p "$state_dir"
+
+# Toggle: if this tab already has our viewer pane, close it.
+if [ -f "$state" ]; then
+    prev=$(<"$state")
+    rm -f "$state"
+    if herdr pane get "$prev" >/dev/null 2>&1; then
+        herdr pane close "$prev" >/dev/null
+        exit 0
+    fi
+fi
+
+root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) \
+    || { notify "herdr-changes: $dir is not inside a git repo"; exit 1; }
+
+new=$(herdr pane split "$pane" --direction right --ratio 0.55 --cwd "$root" --focus \
+    | jq -r '.result.pane.pane_id')
+printf '%s\n' "$new" >"$state"
+# exec: quitting lazygit (q) ends the shell, which closes the pane.
+herdr pane run "$new" "exec lazygit"

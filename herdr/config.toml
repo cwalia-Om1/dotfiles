@@ -31,11 +31,16 @@ type = "shell"
 command = "\"$HOME/.local/bin/ha\" claude"
 description = "start claude (Claude Code on Teams)"
 
+# Toggle a lazygit pane for the focused pane's repo (bin/herdr-changes); q also closes it.
 [[keys.command]]
 key = "prefix+alt+g"
-type = "pane"
-command = "/home/cwalia/.local/bin/lazygit"
-description = "changed files (lazygit)"
+type = "shell"
+command = "\"$HOME/.local/bin/herdr-changes\""
+description = "toggle changed-files pane (lazygit)"
+
+# Use the terminal's own colors, so the terminal background shows through.
+[theme]
+name = "terminal"
 
 [ui.sound]
 enabled = false

@@ -123,6 +123,8 @@ log "Installed/symlinked ~/.docker/config.json"
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$REPO_DIR/bin/sync-repos" "$HOME/.local/bin/sync-repos"
 log "Linked ~/.local/bin/sync-repos"
+ln -sfn "$REPO_DIR/bin/herdr-changes" "$HOME/.local/bin/herdr-changes"
+log "Linked ~/.local/bin/herdr-changes"
 
 # Persist ~/.config/herdr (session snapshot, plugins) on EBS so it survives a
 # rebuild. Link the whole dir: herdr saves via temp-file+rename, which would
