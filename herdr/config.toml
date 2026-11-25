@@ -31,5 +31,11 @@ type = "shell"
 command = "\"$HOME/.local/bin/ha\" claude"
 description = "start claude (Claude Code on Teams)"
 
+[[keys.command]]
+key = "prefix+alt+g"
+type = "pane"
+command = "/home/cwalia/.local/bin/lazygit"
+description = "changed files (lazygit)"
+
 [ui.sound]
 enabled = false
