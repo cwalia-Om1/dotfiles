@@ -249,6 +249,26 @@ if command -v claude >/dev/null 2>&1; then
 fi
 
 # ============================================================================
+# Terminfo for Ghostty (TERM=xterm-ghostty needs ncurses 6.5+; Ubuntu 24.04 has 6.4)
+# ============================================================================
+if [ -d "$REPO_DIR/terminfo" ]; then
+    for ti in "$REPO_DIR"/terminfo/*.terminfo; do
+        [ -e "$ti" ] || continue
+        entry="$(basename "$ti" .terminfo)"
+        if infocmp "$entry" > /dev/null 2>&1; then
+            log "terminfo entry '$entry' already resolves, skipping"
+        elif command -v tic > /dev/null 2>&1; then
+            log "Installing terminfo entry '$entry' into ~/.terminfo..."
+            mkdir -p "$HOME/.terminfo"
+            tic -x -o "$HOME/.terminfo" "$ti" \
+                || warn "tic failed for $entry; terminal may misbehave under TERM=$entry"
+        else
+            warn "tic not found; cannot install terminfo entry '$entry'"
+        fi
+    done
+fi
+
+# ============================================================================
 # Ensure antidote (plugin manager). .zshrc runs `antidote load` on first launch.
 # ============================================================================
 if [ ! -d "${HOME}/.antidote" ]; then
