@@ -38,6 +38,13 @@ type = "shell"
 command = "\"$HOME/.local/bin/herdr-changes\""
 description = "toggle changed-files pane (lazygit)"
 
+# Docker workspace: view (lazydocker), manage (docker-manage), usage (bin/herdr-docker).
+[[keys.command]]
+key = "prefix+alt+d"
+type = "shell"
+command = "\"$HOME/.local/bin/herdr-docker\""
+description = "open docker workspace"
+
 # Use the terminal's own colors, so the terminal background shows through.
 [theme]
 name = "terminal"
