@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# herdr-docker: open (or focus) a "docker" herdr workspace.
+#   tab "view":   lazydocker | docker stats
+#   tab "manage": docker-manage (remove / update containers)
+#
+# Bound in herdr/config.toml (type = "shell", runs detached).
+set -euo pipefail
+# Launched detached by the herdr server, whose PATH may lack ~/.local/bin.
+export PATH="$HOME/.local/bin:$PATH"
+
+LABEL=docker
+
+notify() { herdr notification show "$1" >/dev/null 2>&1 || printf '%s\n' "$1" >&2; }
+
+for t in herdr jq docker lazydocker; do
+    command -v "$t" >/dev/null 2>&1 || { notify "herdr-docker: $t not found"; exit 1; }
+done
+
+existing=$(herdr workspace list \
+    | jq -r --arg l "$LABEL" '[.result.workspaces[] | select(.label == $l)][0].workspace_id // empty')
+if [ -n "$existing" ]; then
+    herdr workspace focus "$existing" >/dev/null
+    exit 0
+fi
+
+ws_json=$(herdr workspace create --label "$LABEL" --cwd "$HOME" --no-focus)
+ws=$(jq -r '.result.workspace.workspace_id' <<<"$ws_json")
+view_tab=$(jq -r '.result.tab.tab_id' <<<"$ws_json")
+view_pane=$(jq -r '.result.root_pane.pane_id' <<<"$ws_json")
+herdr tab rename "$view_tab" view >/dev/null
+
+stats_pane=$(herdr pane split "$view_pane" --direction right --ratio 0.65 --cwd "$HOME" --no-focus \
+    | jq -r '.result.pane.pane_id')
+herdr pane run "$view_pane" "lazydocker"
+herdr pane run "$stats_pane" \
+    "docker stats --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'"
+
+manage_json=$(herdr tab create --workspace "$ws" --label manage --cwd "$HOME" --no-focus)
+manage_pane=$(jq -r '.result.root_pane.pane_id' <<<"$manage_json")
+if command -v docker-manage >/dev/null 2>&1; then
+    herdr pane run "$manage_pane" "docker-manage"
+fi
+
+herdr tab focus "$view_tab" >/dev/null
+herdr workspace focus "$ws" >/dev/null

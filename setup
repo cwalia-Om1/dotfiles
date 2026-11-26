@@ -125,6 +125,8 @@ ln -sfn "$REPO_DIR/bin/sync-repos" "$HOME/.local/bin/sync-repos"
 log "Linked ~/.local/bin/sync-repos"
 ln -sfn "$REPO_DIR/bin/herdr-changes" "$HOME/.local/bin/herdr-changes"
 log "Linked ~/.local/bin/herdr-changes"
+ln -sfn "$REPO_DIR/bin/herdr-docker" "$HOME/.local/bin/herdr-docker"
+log "Linked ~/.local/bin/herdr-docker"
 
 # open-url: $BROWSER on the devenv -- copies links to the Mac clipboard (OSC 52).
 ln -sfn "$REPO_DIR/bin/open-url" "$HOME/.local/bin/open-url"
