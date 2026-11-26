@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# docker-manage: fzf menu to remove / update / restart containers.
+# Runs in the "manage" tab of the herdr docker workspace (bin/herdr-docker).
+#
+# Update: compose containers are pulled and recreated through their compose
+# project; plain `docker run` containers only get their image pulled, since
+# the original run flags cannot be recovered.
+set -uo pipefail
+
+for t in docker fzf; do
+    command -v "$t" >/dev/null 2>&1 || { echo "docker-manage: $t not found" >&2; exit 1; }
+done
+
+FMT='{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Label "com.docker.compose.project"}}'
+LIST_CMD="docker ps -a --format '$FMT'"
+
+confirm() {
+    local ans
+    read -rp "$1 [y/N] " ans
+    [[ $ans == [yY]* ]]
+}
+
+pause() { read -rp $'\nPress Enter to continue... ' _; }
+
+label() { docker inspect --format "{{index .Config.Labels \"$2\"}}" "$1"; }
+
+update_one() {
+    local id=$1 name image project
+    name=$(docker inspect --format '{{.Name}}' "$id"); name=${name#/}
+    image=$(docker inspect --format '{{.Config.Image}}' "$id")
+    project=$(label "$id" com.docker.compose.project)
+
+    if [ -n "$project" ]; then
+        local service workdir files args=()
+        service=$(label "$id" com.docker.compose.service)
+        workdir=$(label "$id" com.docker.compose.project.working_dir)
+        files=$(label "$id" com.docker.compose.project.config_files)
+        IFS=',' read -ra cfgs <<<"$files"
+        for f in "${cfgs[@]}"; do args+=(-f "$f"); done
+        echo "==> $name: compose $project/$service"
+        docker compose -p "$project" --project-directory "$workdir" "${args[@]}" pull "$service" \
+            && docker compose -p "$project" --project-directory "$workdir" "${args[@]}" up -d "$service"
+    else
+        echo "==> $name: docker pull $image"
+        docker pull "$image" \
+            && echo "    pulled; not a compose container, so recreate it with its original run flags"
+    fi
+}
+
+run_action() {
+    local action=$1; shift
+    local ids=("$@")
+    case $action in
+        remove)
+            confirm "Remove ${#ids[@]} container(s)?" && docker rm -f "${ids[@]}" ;;
+        remove+volumes)
+            confirm "Remove ${#ids[@]} container(s) AND their anonymous volumes?" \
+                && docker rm -f -v "${ids[@]}" ;;
+        update)
+            confirm "Update ${#ids[@]} container(s)?" \
+                && for id in "${ids[@]}"; do update_one "$id"; done ;;
+        restart)
+            docker restart "${ids[@]}" ;;
+        logs)
+            for id in "${ids[@]}"; do docker logs --tail 500 "$id" 2>&1; done | less +G
+            return ;;
+        *) return ;;
+    esac
+    pause
+}
+
+while true; do
+    out=$(eval "$LIST_CMD" | fzf --multi --reverse --delimiter=$'\t' --with-nth=2.. \
+        --header='TAB select · ENTER actions · ctrl-r reload · ctrl-p prune dangling images · ESC quit' \
+        --expect=ctrl-p \
+        --bind "ctrl-r:reload($LIST_CMD)" \
+        --preview 'docker logs --tail 40 {1} 2>&1' --preview-window=down,40%,wrap)
+    rc=$?
+    key=$(head -1 <<<"$out")
+
+    if [ "$key" = ctrl-p ]; then
+        confirm "Remove dangling images?" && docker image prune -f
+        pause
+        continue
+    fi
+    [ $rc -ne 0 ] && exit 0
+
+    mapfile -t ids < <(tail -n +2 <<<"$out" | cut -f1)
+    [ ${#ids[@]} -eq 0 ] && continue
+
+    action=$(printf '%s\n' update restart logs remove remove+volumes back \
+        | fzf --reverse --height=40% --header="${#ids[@]} container(s) selected")
+    run_action "$action" "${ids[@]}"
+done
