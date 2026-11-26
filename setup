@@ -302,7 +302,7 @@ fi
 
 # apt packages (batched to avoid multiple `apt update` runs).
 apt_packages=()
-for pkg in zsh less unzip; do
+for pkg in zsh less unzip fzf; do
     command -v "$pkg" &> /dev/null || apt_packages+=("$pkg")
 done
 if [ ${#apt_packages[@]} -gt 0 ]; then
@@ -366,6 +366,19 @@ if ! command -v docker-credential-ecr-login &> /dev/null; then
     fi
 else
     log "Docker ECR Credential Helper already installed"
+fi
+
+# lazydocker (prefix+alt+d docker workspace, bin/herdr-docker)
+if command -v lazydocker &> /dev/null; then
+    log "lazydocker already installed"
+elif detect_arch; then
+    log "Installing lazydocker..."
+    LAZYDOCKER_VERSION="0.25.2"
+    [ "$ecr_arch" = "amd64" ] && ld_arch="x86_64" || ld_arch="arm64"
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL "https://github.com/jesseduffield/lazydocker/releases/download/v${LAZYDOCKER_VERSION}/lazydocker_${LAZYDOCKER_VERSION}_Linux_${ld_arch}.tar.gz" \
+        | tar -xz -C "$HOME/.local/bin" lazydocker \
+        || warn "lazydocker install failed"
 fi
 
 log "Dotfiles installation completed."
