@@ -129,6 +129,8 @@ ln -sfn "$REPO_DIR/bin/herdr-docker" "$HOME/.local/bin/herdr-docker"
 log "Linked ~/.local/bin/herdr-docker"
 ln -sfn "$REPO_DIR/bin/docker-manage" "$HOME/.local/bin/docker-manage"
 log "Linked ~/.local/bin/docker-manage"
+ln -sfn "$REPO_DIR/bin/docker-usage" "$HOME/.local/bin/docker-usage"
+log "Linked ~/.local/bin/docker-usage"
 
 # open-url: $BROWSER on the devenv -- copies links to the Mac clipboard (OSC 52).
 ln -sfn "$REPO_DIR/bin/open-url" "$HOME/.local/bin/open-url"
@@ -306,7 +308,7 @@ fi
 
 # apt packages (batched to avoid multiple `apt update` runs).
 apt_packages=()
-for pkg in zsh less unzip fzf; do
+for pkg in zsh less unzip fzf htop; do
     command -v "$pkg" &> /dev/null || apt_packages+=("$pkg")
 done
 if [ ${#apt_packages[@]} -gt 0 ]; then

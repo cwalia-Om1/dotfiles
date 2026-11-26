@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# docker-usage: total Docker CPU / memory vs the host, grouped by compose
+# project, plus `docker system df`. Refreshes every N seconds (default 3).
+# Runs in the "usage" tab of the herdr docker workspace (bin/herdr-docker).
+set -uo pipefail
+
+INTERVAL=${1:-3}
+
+for t in docker jq; do
+    command -v "$t" >/dev/null 2>&1 || { echo "docker-usage: $t not found" >&2; exit 1; }
+done
+
+CORES=$(nproc)
+MEM_TOTAL=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
+
+render() {
+    local projects stats
+    projects=$(docker ps --no-trunc \
+        --format '{"id":"{{.ID}}","p":"{{.Label "com.docker.compose.project"}}"}' \
+        | jq -s 'map({(.id): .p}) | add // {}')
+    stats=$(docker stats --no-stream --format json | jq -s .)
+
+    jq -r -n --argjson p "$projects" --argjson s "$stats" \
+        --argjson cores "$CORES" --argjson memtotal "$MEM_TOTAL" '
+        def bytes: capture("^(?<n>[0-9.]+)(?<u>[A-Za-z]*)")
+            | (.n | tonumber) * ({"B":1,"kB":1e3,"KB":1e3,"KiB":1024,"MB":1e6,"MiB":1048576,
+                                 "GB":1e9,"GiB":1073741824,"TB":1e12,"TiB":1099511627776}[.u] // 1);
+        def human: if . >= 1073741824 then "\((. / 1073741824 * 10 | round) / 10) GiB"
+                   elif . >= 1048576 then "\(. / 1048576 | round) MiB"
+                   else "\(. / 1024 | round) KiB" end;
+        def pct: rtrimstr("%") | tonumber? // 0;
+        def row(name; n; cpu; mem): "  \(name | .[0:24] | . + " " * (24 - length))"
+            + "\(n | tostring | " " * (4 - length) + .)  "
+            + "\(cpu * 10 | round / 10 | tostring + "%" | " " * (8 - length) + .)  "
+            + "\(mem | human)";
+
+        ($s | map({p: ($p[.Container] // "" | if . == "" then "(no project)" else . end),
+                   cpu: (.CPUPerc | pct),
+                   mem: (.MemUsage | split(" / ")[0] | bytes)})) as $rows
+        | ($rows | map(.cpu) | add // 0) as $cpu
+        | ($rows | map(.mem) | add // 0) as $mem
+        | "Host    \($cores) CPU (\($cores * 100)% max) · \($memtotal | human) RAM",
+          "Docker  \($rows | length) running · \($cpu * 10 | round / 10)% CPU · \($mem | human) (\($mem / $memtotal * 1000 | round / 10)% of RAM)",
+          "",
+          "── by compose project ──────────────────────────────",
+          "  \("PROJECT" | . + " " * (24 - length))   N       CPU  MEM",
+          ($rows | group_by(.p) | map({p: .[0].p, n: length,
+                                      cpu: (map(.cpu) | add), mem: (map(.mem) | add)})
+                 | sort_by(-.mem)[] | row(.p; .n; .cpu; .mem))'
+}
+
+# Disk usage walks every layer and can race with writing containers, so it is
+# refreshed less often and the last good result is kept on error.
+DF_EVERY=30
+df_out="  (loading...)"
+df_at=-$DF_EVERY
+
+while true; do
+    if (( SECONDS - df_at >= DF_EVERY )); then
+        if new_df=$(docker system df --format \
+            '{{printf "%-14s" .Type}} {{printf "%10s" .Size}}  reclaimable {{.Reclaimable}}' 2>/dev/null); then
+            new_df=$(sed 's/^/  /' <<<"$new_df")
+            df_out=$new_df
+        fi
+        df_at=$SECONDS
+    fi
+    out=$(render 2>&1)
+    printf '\033[H\033[2J%s\n\n── disk (docker system df, every %ss) ─────────────\n%s\n\n  %s · every %ss · Ctrl+C to stop\n' \
+        "$out" "$DF_EVERY" "$df_out" "$(date +%T)" "$INTERVAL"
+    sleep "$INTERVAL"
+done
