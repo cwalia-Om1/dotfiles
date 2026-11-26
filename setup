@@ -305,6 +305,22 @@ else
     log "uv already installed"
 fi
 
+# Language servers for the pyright-lsp / typescript-lsp Claude plugins.
+# npm's global prefix is /usr (root), so install into ~/.local instead.
+if command -v npm &> /dev/null; then
+    if ! command -v pyright-langserver &> /dev/null || ! command -v typescript-language-server &> /dev/null; then
+        log "Installing pyright and typescript-language-server..."
+        npm install -g --prefix "$HOME/.local" --no-fund --no-audit \
+            pyright typescript typescript-language-server >/dev/null \
+            && log "Language servers installed" \
+            || warn "language server install failed"
+    else
+        log "Language servers already installed"
+    fi
+else
+    warn "npm missing; skipping language servers"
+fi
+
 
 # apt packages (batched to avoid multiple `apt update` runs).
 apt_packages=()
