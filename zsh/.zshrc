@@ -175,3 +175,12 @@ if [[ -o interactive && -d /mnt/devdata ]] && (( $+commands[sync-repos] )); then
   unset _sr_notice
   sync-repos --if-stale 14400 &>/dev/null &!
 fi
+
+# Devenv only: attach herdr on interactive SSH logins (`devenv connect`), so
+# one command gives auto-start, config sync, the .om1.devenv tunnel and herdr.
+# Skipped inside herdr/tmux, in VS Code, or with NO_HERDR=1. Detaching herdr
+# returns to this shell; its server keeps panes and agents running.
+if [[ -o interactive && -d /mnt/devdata && -n "$SSH_TTY" && -z "$HERDR_ENV$TMUX$NO_HERDR" \
+      && "$TERM_PROGRAM" != vscode ]] && (( $+commands[herdr] )); then
+  herdr || print -r -- "herdr exited ($?); plain shell. NO_HERDR=1 skips auto-attach."
+fi
